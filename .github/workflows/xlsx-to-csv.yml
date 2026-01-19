@@ -19,6 +19,7 @@ jobs:
       run: |
         #git clone -b ${{ github.event.pull_request.head.ref }} "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.event.pull_request.head.repo.full_name }}.git"
         git clone -b ${{ github.event.pull_request.head.ref }} https://github.com/${{ github.event.pull_request.head.repo.full_name }}.git
+        cd $(basename "${{ github.event.pull_request.head.repo.full_name }}")
     
     - name: Get  author email
       run: |
@@ -39,21 +40,37 @@ jobs:
 
     - name: Create output directory
       run: |
-        rm -rf mosip-data/mosip_master_csv/csv
         mkdir -p mosip-data/mosip_master_csv/csv
 
-    - name: Convert all XLSX to CSV
+    - name: Convert XLSX to CSV only when changed
       run: |
-        for xlsx_file in mosip-data/mosip_master/xlsx/*.xlsx; do
-          csv_file="mosip-data/mosip_master_csv/csv/$(basename "${xlsx_file%.xlsx}.csv")"
-          xlsx2csv "$xlsx_file" > "$csv_file"
-          echo "Converted $xlsx_file to $csv_file"
+        set -e
+        for xlsx_file in mosip_master/xlsx/*.xlsx; do
+          base_name=$(basename "${xlsx_file%.xlsx}")
+          csv_file="mosip_master_csv/csv/${base_name}.csv"
+          tmp_csv="$(mktemp)"
+
+          xlsx2csv "$xlsx_file" > "$tmp_csv"
+
+          if [ ! -f "$csv_file" ]; then
+            echo "New CSV: $csv_file"
+            mv "$tmp_csv" "$csv_file"
+          elif ! diff -q "$csv_file" "$tmp_csv" >/dev/null; then
+            echo "Updated CSV: $csv_file"
+            mv "$tmp_csv" "$csv_file"
+          else
+            echo "No change: $csv_file"
+            rm "$tmp_csv"
+          fi
         done
 
-    - name: Commit and push changes
+    - name: Commit and push changes (only if needed)
       run: |
-        cd mosip-data
-        git branch
-        git add .
-        git commit -s -m "Added converted CSV files" || echo "No changes to commit"
-        git push "https://x-access-token:${{ secrets.ACTION_PAT }}@github.com/${{ github.event.pull_request.head.repo.full_name }}.git" HEAD:${{ github.event.pull_request.head.ref }}
+        if git status --porcelain mosip_master_csv/csv | grep .; then
+          git add mosip_master_csv/csv
+          git commit -s -m "Update CSV files generated from XLSX"
+          git push "https://x-access-token:${{ secrets.ACTION_PAT }}@github.com/${{ github.event.pull_request.head.repo.full_name }}.git" \
+            HEAD:${{ github.event.pull_request.head.ref }}
+        else
+          echo "No CSV changes detected. Skipping commit."
+        fi
