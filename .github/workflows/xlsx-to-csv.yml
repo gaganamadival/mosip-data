@@ -14,14 +14,14 @@ on:
 jobs:
   convert_xlsx_to_csv:
     runs-on: ubuntu-latest
+
     steps:
     - name: Clone the repository
       run: |
-        #git clone -b ${{ github.event.pull_request.head.ref }} "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.event.pull_request.head.repo.full_name }}.git"
-        git clone -b ${{ github.event.pull_request.head.ref }} https://github.com/${{ github.event.pull_request.head.repo.full_name }}.git
-        cd $(basename "${{ github.event.pull_request.head.repo.full_name }}")
-    
-    - name: Get  author email
+        git clone -b ${{ github.event.pull_request.head.ref }} \
+        https://github.com/${{ github.event.pull_request.head.repo.full_name }}.git
+
+    - name: Get author email
       run: |
         PR_NUMBER=${{ github.event.number }}
         commits=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
@@ -29,48 +29,35 @@ jobs:
           "https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/commits")
         email=$(echo "$commits" | jq -r '.[0].commit.author.email // "${{ github.event.pull_request.user.login }}@users.noreply.github.com"')
         echo "author_email=$email" >> $GITHUB_ENV
-    
+
     - name: Set up Git identity
       run: |
         git config --global user.name "${{ github.event.pull_request.user.login }}"
         git config --global user.email "${{ env.author_email }}"
 
     - name: Install xlsx2csv
-      run: sudo apt-get install -y xlsx2csv
+      run: sudo apt-get update && sudo apt-get install -y xlsx2csv
 
-    - name: Create output directory
+    - name: Ensure CSV output directory exists
       run: |
         mkdir -p mosip-data/mosip_master_csv/csv
 
-    - name: Convert XLSX to CSV only when changed
+    - name: Convert all XLSX to CSV
       run: |
-        set -e
-        for xlsx_file in mosip_master/xlsx/*.xlsx; do
-          base_name=$(basename "${xlsx_file%.xlsx}")
-          csv_file="mosip_master_csv/csv/${base_name}.csv"
-          tmp_csv="$(mktemp)"
-
-          xlsx2csv "$xlsx_file" > "$tmp_csv"
-
-          if [ ! -f "$csv_file" ]; then
-            echo "New CSV: $csv_file"
-            mv "$tmp_csv" "$csv_file"
-          elif ! diff -q "$csv_file" "$tmp_csv" >/dev/null; then
-            echo "Updated CSV: $csv_file"
-            mv "$tmp_csv" "$csv_file"
-          else
-            echo "No change: $csv_file"
-            rm "$tmp_csv"
-          fi
+        for xlsx_file in mosip-data/mosip_master/xlsx/*.xlsx; do
+          csv_file="mosip-data/mosip_master_csv/csv/$(basename "${xlsx_file%.xlsx}.csv")"
+          xlsx2csv "$xlsx_file" > "$csv_file"
+          echo "Converted $xlsx_file to $csv_file"
         done
 
-    - name: Commit and push changes (only if needed)
+    - name: Commit and push changes only if needed
       run: |
-        if git status --porcelain mosip_master_csv/csv | grep .; then
+        cd mosip-data
+        if git status --porcelain | grep .; then
           git add mosip_master_csv/csv
-          git commit -s -m "Update CSV files generated from XLSX"
+          git commit -s -m "Update CSV files from XLSX"
           git push "https://x-access-token:${{ secrets.ACTION_PAT }}@github.com/${{ github.event.pull_request.head.repo.full_name }}.git" \
             HEAD:${{ github.event.pull_request.head.ref }}
         else
-          echo "No CSV changes detected. Skipping commit."
+          echo "No CSV changes to commit"
         fi
